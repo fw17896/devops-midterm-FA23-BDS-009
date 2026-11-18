@@ -49,7 +49,11 @@ pipeline {
         stage('Build Docker Image') {
             steps {
                 sh '''
-                    docker build -t ml-midterm:latest .
+                    echo "Building updated Docker image..."
+
+                    docker build -t ml-midterm:build-${BUILD_NUMBER} .
+
+                    echo "New Docker image created successfully."
                 '''
             }
         }
@@ -57,13 +61,17 @@ pipeline {
         stage('Deploy Application') {
             steps {
                 sh '''
+                    echo "Replacing previous application container..."
+
                     docker rm -f ml-midterm || true
 
                     docker run -d \
                         --name ml-midterm \
                         --restart unless-stopped \
                         -p 8000:8000 \
-                        ml-midterm:latest
+                        ml-midterm:build-${BUILD_NUMBER}
+
+                    echo "Updated model deployed successfully."
                 '''
             }
         }
