@@ -10,6 +10,10 @@ pipeline {
         githubPush()
     }
 
+    environment {
+        COMMITTER_EMAIL = ''
+    }
+
     stages {
 
         stage('Checkout') {
@@ -21,6 +25,24 @@ pipeline {
                         script: 'git rev-parse HEAD',
                         returnStdout: true
                     ).trim()
+
+                    // Get the email recorded as the Git commit's committer
+                    def email = sh(
+                        script: "git log -1 --format='%ce'",
+                        returnStdout: true
+                    ).trim().toLowerCase()
+
+                    // Allow only the known student and instructor addresses
+                    if (email == 'fw7896@gmail.com') {
+                        env.COMMITTER_EMAIL = 'fw7896@gmail.com'
+                    } else if (email == 'qasimalik@gmail.com') {
+                        env.COMMITTER_EMAIL = 'qasimalik@gmail.com'
+                    } else {
+                        env.COMMITTER_EMAIL = ''
+                    }
+
+                    echo "Committer email detected: ${email}"
+                    echo "Notification recipient: ${env.COMMITTER_EMAIL ?: 'No approved recipient'}"
                 }
 
                 echo 'Latest GitHub code downloaded successfully.'
@@ -50,9 +72,7 @@ pipeline {
             steps {
                 sh '''
                     echo "Building updated Docker image..."
-
                     docker build -t ml-midterm:build-${BUILD_NUMBER} .
-
                     echo "New Docker image created successfully."
                 '''
             }
@@ -100,12 +120,77 @@ pipeline {
     }
 
     post {
+
         success {
-            echo 'CI/CD Pipeline completed successfully!'
+            script {
+                if (env.COMMITTER_EMAIL) {
+                    emailext(
+                        to: env.COMMITTER_EMAIL,
+                        subject: "SUCCESS: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER}",
+                        body: """
+                        <h2>ML Retraining Pipeline Successful!</h2>
+
+                        <p>Hello,</p>
+
+                        <p>Your GitHub commit successfully triggered the Jenkins pipeline.</p>
+
+                        <b>Build Details:</b>
+                        <ul>
+                            <li>Project: ${env.JOB_NAME}</li>
+                            <li>Build Number: ${env.BUILD_NUMBER}</li>
+                            <li>Commit SHA: ${env.SOURCE_SHA}</li>
+                            <li>Status: SUCCESS</li>
+                        </ul>
+
+                        <p>The model was trained, tested, built into a Docker image,
+                        and deployed successfully.</p>
+
+                        <p>Regards,<br>Jenkins CI/CD Pipeline</p>
+                        """,
+                        mimeType: 'text/html'
+                    )
+
+                    echo "Success notification sent to ${env.COMMITTER_EMAIL}"
+                } else {
+                    echo 'No approved committer email found. Notification skipped.'
+                }
+            }
         }
 
         failure {
-            echo 'CI/CD Pipeline failed. Check Jenkins console output.'
+            script {
+                if (env.COMMITTER_EMAIL) {
+                    emailext(
+                        to: env.COMMITTER_EMAIL,
+                        subject: "FAILED: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER}",
+                        body: """
+                        <h2>ML Retraining Pipeline Failed!</h2>
+
+                        <p>Hello,</p>
+
+                        <p>Your GitHub commit triggered the Jenkins pipeline,
+                        but the build failed.</p>
+
+                        <b>Build Details:</b>
+                        <ul>
+                            <li>Project: ${env.JOB_NAME}</li>
+                            <li>Build Number: ${env.BUILD_NUMBER}</li>
+                            <li>Commit SHA: ${env.SOURCE_SHA}</li>
+                            <li>Status: FAILURE</li>
+                        </ul>
+
+                        <p>Please check the Jenkins console output for details.</p>
+
+                        <p>Regards,<br>Jenkins CI/CD Pipeline</p>
+                        """,
+                        mimeType: 'text/html'
+                    )
+
+                    echo "Failure notification sent to ${env.COMMITTER_EMAIL}"
+                } else {
+                    echo 'No approved committer email found. Notification skipped.'
+                }
+            }
         }
     }
 }
