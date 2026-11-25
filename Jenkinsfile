@@ -12,42 +12,44 @@ pipeline {
 
     environment {
         COMMITTER_EMAIL = ''
+        SOURCE_SHA = ''
     }
 
     stages {
+
+        // ==========================================
+        // STAGE 1: CHECKOUT AND IDENTIFY COMMITTER
+        // ==========================================
 
         stage('Checkout') {
             steps {
                 checkout scm
 
                 script {
+                    // Get latest commit SHA
                     env.SOURCE_SHA = sh(
                         script: 'git rev-parse HEAD',
                         returnStdout: true
                     ).trim()
 
-                    // Get the email recorded as the Git commit's committer
-                    def email = sh(
+                    // Get the email recorded in the latest commit
+                    env.COMMITTER_EMAIL = sh(
                         script: "git log -1 --format='%ce'",
                         returnStdout: true
-                    ).trim().toLowerCase()
+                    ).trim()
 
-                    // Allow only the known student and instructor addresses
-                    if (email == 'fw7896@gmail.com') {
-                        env.COMMITTER_EMAIL = 'fw7896@gmail.com'
-                    } else if (email == 'qasimalik@gmail.com') {
-                        env.COMMITTER_EMAIL = 'qasimalik@gmail.com'
-                    } else {
-                        env.COMMITTER_EMAIL = ''
-                    }
-
-                    echo "Committer email detected: ${email}"
-                    echo "Notification recipient: ${env.COMMITTER_EMAIL ?: 'No approved recipient'}"
+                    echo "Latest Commit SHA: ${env.SOURCE_SHA}"
+                    echo "Committer Email: ${env.COMMITTER_EMAIL}"
                 }
 
                 echo 'Latest GitHub code downloaded successfully.'
             }
         }
+
+
+        // ==========================================
+        // STAGE 2: TRAIN MODEL AND RUN TESTS
+        // ==========================================
 
         stage('Train Model and Test') {
             steps {
@@ -68,15 +70,27 @@ pipeline {
             }
         }
 
+
+        // ==========================================
+        // STAGE 3: BUILD NEW DOCKER IMAGE
+        // ==========================================
+
         stage('Build Docker Image') {
             steps {
                 sh '''
                     echo "Building updated Docker image..."
+
                     docker build -t ml-midterm:build-${BUILD_NUMBER} .
+
                     echo "New Docker image created successfully."
                 '''
             }
         }
+
+
+        // ==========================================
+        // STAGE 4: DEPLOY UPDATED APPLICATION
+        // ==========================================
 
         stage('Deploy Application') {
             steps {
@@ -96,12 +110,18 @@ pipeline {
             }
         }
 
+
+        // ==========================================
+        // STAGE 5: VERIFY DEPLOYMENT
+        // ==========================================
+
         stage('Verify Deployment') {
             steps {
                 sh '''
                     echo "Checking application..."
 
                     for i in $(seq 1 20); do
+
                         if curl -fsS http://localhost:8000/metrics; then
                             echo ""
                             echo "Application is running successfully!"
@@ -112,83 +132,162 @@ pipeline {
                     done
 
                     echo "Deployment verification failed!"
+
                     docker logs ml-midterm
+
                     exit 1
                 '''
             }
         }
     }
 
+
+    // ==========================================
+    // EMAIL NOTIFICATIONS
+    // ==========================================
+
     post {
+
+        // ======================================
+        // SUCCESS EMAIL
+        // ======================================
 
         success {
             script {
-                if (env.COMMITTER_EMAIL) {
-                    emailext(
-                        to: env.COMMITTER_EMAIL,
-                        subject: "SUCCESS: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER}",
-                        body: """
-                        <h2>ML Retraining Pipeline Successful!</h2>
 
-                        <p>Hello,</p>
+                if (env.COMMITTER_EMAIL?.trim()) {
 
-                        <p>Your GitHub commit successfully triggered the Jenkins pipeline.</p>
+                    try {
 
-                        <b>Build Details:</b>
-                        <ul>
-                            <li>Project: ${env.JOB_NAME}</li>
-                            <li>Build Number: ${env.BUILD_NUMBER}</li>
-                            <li>Commit SHA: ${env.SOURCE_SHA}</li>
-                            <li>Status: SUCCESS</li>
-                        </ul>
+                        emailext(
+                            to: env.COMMITTER_EMAIL,
 
-                        <p>The model was trained, tested, built into a Docker image,
-                        and deployed successfully.</p>
+                            subject: "SUCCESS: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER}",
 
-                        <p>Regards,<br>Jenkins CI/CD Pipeline</p>
-                        """,
-                        mimeType: 'text/html'
-                    )
+                            mimeType: 'text/html',
 
-                    echo "Success notification sent to ${env.COMMITTER_EMAIL}"
+                            body: """
+                            <html>
+                            <body>
+
+                                <h2>ML Retraining Pipeline Successful!</h2>
+
+                                <p>Hello,</p>
+
+                                <p>Your GitHub commit successfully triggered the Jenkins CI/CD pipeline.</p>
+
+                                <h3>Build Details:</h3>
+
+                                <ul>
+                                    <li><b>Project:</b> ${env.JOB_NAME}</li>
+                                    <li><b>Build Number:</b> ${env.BUILD_NUMBER}</li>
+                                    <li><b>Commit SHA:</b> ${env.SOURCE_SHA}</li>
+                                    <li><b>Committer Email:</b> ${env.COMMITTER_EMAIL}</li>
+                                    <li><b>Status:</b> SUCCESS</li>
+                                </ul>
+
+                                <h3>Completed Tasks:</h3>
+
+                                <ul>
+                                    <li>GitHub code checkout</li>
+                                    <li>Model retraining</li>
+                                    <li>Automated testing</li>
+                                    <li>Docker image building</li>
+                                    <li>Application deployment</li>
+                                    <li>API verification</li>
+                                </ul>
+
+                                <p>Your updated machine learning model has been deployed successfully.</p>
+
+                                <br>
+
+                                <p>Regards,<br>
+                                Jenkins CI/CD Pipeline</p>
+
+                            </body>
+                            </html>
+                            """
+                        )
+
+                        echo "SUCCESS EMAIL SENT TO: ${env.COMMITTER_EMAIL}"
+
+                    } catch (err) {
+
+                        echo "EMAIL SENDING FAILED: ${err.getMessage()}"
+
+                    }
+
                 } else {
-                    echo 'No approved committer email found. Notification skipped.'
+
+                    echo "No committer email found. Email notification skipped."
+
                 }
             }
         }
 
+
+        // ======================================
+        // FAILURE EMAIL
+        // ======================================
+
         failure {
             script {
-                if (env.COMMITTER_EMAIL) {
-                    emailext(
-                        to: env.COMMITTER_EMAIL,
-                        subject: "FAILED: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER}",
-                        body: """
-                        <h2>ML Retraining Pipeline Failed!</h2>
 
-                        <p>Hello,</p>
+                if (env.COMMITTER_EMAIL?.trim()) {
 
-                        <p>Your GitHub commit triggered the Jenkins pipeline,
-                        but the build failed.</p>
+                    try {
 
-                        <b>Build Details:</b>
-                        <ul>
-                            <li>Project: ${env.JOB_NAME}</li>
-                            <li>Build Number: ${env.BUILD_NUMBER}</li>
-                            <li>Commit SHA: ${env.SOURCE_SHA}</li>
-                            <li>Status: FAILURE</li>
-                        </ul>
+                        emailext(
+                            to: env.COMMITTER_EMAIL,
 
-                        <p>Please check the Jenkins console output for details.</p>
+                            subject: "FAILED: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER}",
 
-                        <p>Regards,<br>Jenkins CI/CD Pipeline</p>
-                        """,
-                        mimeType: 'text/html'
-                    )
+                            mimeType: 'text/html',
 
-                    echo "Failure notification sent to ${env.COMMITTER_EMAIL}"
+                            body: """
+                            <html>
+                            <body>
+
+                                <h2>ML Retraining Pipeline Failed!</h2>
+
+                                <p>Hello,</p>
+
+                                <p>Your GitHub commit triggered the Jenkins CI/CD pipeline, but the build failed.</p>
+
+                                <h3>Build Details:</h3>
+
+                                <ul>
+                                    <li><b>Project:</b> ${env.JOB_NAME}</li>
+                                    <li><b>Build Number:</b> ${env.BUILD_NUMBER}</li>
+                                    <li><b>Commit SHA:</b> ${env.SOURCE_SHA}</li>
+                                    <li><b>Committer Email:</b> ${env.COMMITTER_EMAIL}</li>
+                                    <li><b>Status:</b> FAILURE</li>
+                                </ul>
+
+                                <p>Please check Jenkins Console Output to identify the issue.</p>
+
+                                <br>
+
+                                <p>Regards,<br>
+                                Jenkins CI/CD Pipeline</p>
+
+                            </body>
+                            </html>
+                            """
+                        )
+
+                        echo "FAILURE EMAIL SENT TO: ${env.COMMITTER_EMAIL}"
+
+                    } catch (err) {
+
+                        echo "EMAIL SENDING FAILED: ${err.getMessage()}"
+
+                    }
+
                 } else {
-                    echo 'No approved committer email found. Notification skipped.'
+
+                    echo "No committer email found. Email notification skipped."
+
                 }
             }
         }
